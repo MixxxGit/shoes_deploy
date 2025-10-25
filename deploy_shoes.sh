@@ -146,7 +146,8 @@ download_and_install() {
 
 find_domain_and_certs() {
     info "Searching for Let's Encrypt domain and certificates..."
-    LE_DIR="/etc/letsencrypt/live"
+    #LE_DIR="/etc/letsencrypt/live"
+    LE_DIR="/root/cert"
     if [ ! -d "$LE_DIR" ]; then error "Let's Encrypt directory '$LE_DIR' not found. Please ensure you have generated certificates."; fi
     DOMAIN=$(ls -t "$LE_DIR" 2>/dev/null | head -n 1)
     if [ -z "$DOMAIN" ]; then error "No domains found in '$LE_DIR'."; fi
