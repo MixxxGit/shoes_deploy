@@ -27,6 +27,8 @@ SERVICE_FILE="/etc/systemd/system/shoes.service"
 BINARY_NAME="shoes"
 CONFIG_NAME="config.yml"
 CLIENT_CONFIG_FILE="client_config.txt"
+# User-requested certificate directory override
+LE_DIR="/root/cert" 
 
 # --- Colors for Output ---
 C_RESET='\033[0m'
@@ -145,9 +147,8 @@ download_and_install() {
 }
 
 find_domain_and_certs() {
-    info "Searching for Let's Encrypt domain and certificates..."
-    LE_DIR="/root/cert"
-    if [ ! -d "$LE_DIR" ]; then error "Let's Encrypt directory '$LE_DIR' not found. Please ensure you have generated certificates."; fi
+    info "Searching for domain and certificates in '$LE_DIR'..."
+    if [ ! -d "$LE_DIR" ]; then error "Certificate directory '$LE_DIR' not found. Please ensure certificates are present."; fi
     DOMAIN=$(ls -t "$LE_DIR" 2>/dev/null | head -n 1)
     if [ -z "$DOMAIN" ]; then error "No domains found in '$LE_DIR'."; fi
     info "Automatically selected the most recently updated domain: $DOMAIN"
@@ -288,7 +289,6 @@ EOF
     esac
     CONFIG_CONTENT=$(echo "$CONFIG_CONTENT" | sed -e "s|__DOMAIN__|${DOMAIN}|g" -e "s|__CERT_PATH__|${CERT_PATH}|g" -e "s|__KEY_PATH__|${KEY_PATH}|g" -e "s|__UUID1__|${UUID1}|g" -e "s|__USERNAME__|${DYNAMIC_USERNAME}|g" -e "s|__PASSWORD_SS__|${PASSWORD_SS}|g" -e "s|__PASSWORD_TROJAN__|${PASSWORD_TROJAN}|g" -e "s|__PASSWORD_HYSTERIA2__|${PASSWORD_HYSTERIA2}|g" -e "s|__PASSWORD_TUIC__|${PASSWORD_TUIC}|g" -e "s|__PASSWORD_SNELL__|${PASSWORD_SNELL}|g" -e "s|__PASSWORD_SOCKS__|${PASSWORD_SOCKS}|g" -e "s|__PASSWORD_HTTP__|${PASSWORD_HTTP}|g")
     
-    # Corrected line: use redirection instead of sudo tee
     echo "$CONFIG_CONTENT" > "${CONFIG_DIR}/${CONFIG_NAME}"
     success "Configuration file created: ${CONFIG_DIR}/${CONFIG_NAME}"
 }
@@ -338,7 +338,6 @@ generate_client_link() {
         *) link="Automatic link generation is not supported for template '$template_name'.\nUse these parameters for manual configuration:"; case "$template_name" in "shadow_tls") link+="\nProtocol: ShadowTLS v3 + SOCKS5\nServer: ${DOMAIN}\nPort: 443\nShadowTLS Password: ${PASSWORD_TROJAN}\nSNI: ${DOMAIN}\nSOCKS5 Username: ${DYNAMIC_USERNAME}\nSOCKS5 Password: ${PASSWORD_SOCKS}";; "snell") link+="\nProtocol: Snell v3\nServer: ${DOMAIN}\nPort: 8443\nPSK: ${PASSWORD_SNELL}\nCipher: aes-256-gcm";; esac ;;
     esac
     
-    # Corrected line: use redirection instead of sudo tee, and the file is created locally
     echo -e "$link" > "$CLIENT_CONFIG_FILE"
     success "Client configuration saved to: $CLIENT_CONFIG_FILE"
     echo -e "\n${C_GREEN}--- Client Configuration ---${C_RESET}\n${C_YELLOW}$(cat $CLIENT_CONFIG_FILE)${C_RESET}\n${C_GREEN}----------------------------${C_RESET}\n"
@@ -380,7 +379,6 @@ main() {
             detect_system "$LIBC_OVERRIDE"
             get_latest_release_url
         fi
-        # Since the script is run with sudo, it already has privileges.
         download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     fi
     
@@ -393,3 +391,4 @@ main() {
 }
 
 main "$@"
+
