@@ -5,14 +5,15 @@
 #
 # Features:
 # - Tries to use pre-compiled binaries first.
-# - **Fallback to source compilation** via 'cargo install' if binaries fail.
-# - Installs Rust and build dependencies automatically if needed.
+# - Fallback to source compilation via 'cargo install' if binaries fail.
+# - Installs minimal Rust build dependencies automatically if needed.
 # - Fully automated, no user input required.
 # - Auto-detects OS, architecture, and C library (with manual override).
 # - Auto-configures the system firewall (ufw or firewalld) if active.
 # - Auto-finds Let's Encrypt domain and certs.
 # - Installs and runs as a systemd service.
 # - Generates a client configuration link/data.
+# - Provides uninstallation options.
 
 # Exit on any error
 set -e
@@ -48,9 +49,10 @@ show_help() {
     echo "Usage: $0 [OPTIONS] [CONFIG_TEMPLATE]"
     echo ""
     echo "Options:"
-    echo "  -h, --help        Show this help message and exit."
-    echo "  --libc <type>     Manually specify the C library ('gnu' or 'musl')."
-    echo "                    Defaults to automatic detection if not provided."
+    echo "  -h, --help                    Show this help message and exit."
+    echo "  --libc <type>                 Manually specify the C library ('gnu' or 'musl'). Defaults to auto-detection."
+    echo "  --uninstall                   Uninstall 'shoes' and all related files."
+    echo "  --uninstall-build-deps        Uninstall the build dependencies that were installed by this script."
     echo ""
     echo "Configuration Templates (default: vless_over_websocket):"
     echo "  vless_over_websocket       - VLESS over WebSocket with TLS (recommended)"
@@ -71,13 +73,11 @@ show_help() {
 }
 
 install_build_deps() {
-    info "Installing build dependencies..."
+    info "Installing minimal build dependencies..."
     if command -v dnf &> /dev/null; then
-        sudo dnf groupinstall -y 'Development Tools'
-        sudo dnf install -y cmake openssl-devel
+        sudo dnf install -y gcc make cmake openssl-devel
     elif command -v yum &> /dev/null; then
-        sudo yum groupinstall -y 'Development Tools'
-        sudo yum install -y cmake openssl-devel
+        sudo yum install -y gcc make cmake openssl-devel
     elif command -v apt-get &> /dev/null; then
         sudo apt-get update
         sudo apt-get install -y build-essential pkg-config cmake libssl-dev
@@ -86,6 +86,53 @@ install_build_deps() {
     fi
     success "Build dependencies installed."
 }
+
+uninstall_build_deps() {
+    info "Uninstalling build dependencies..."
+    if command -v dnf &> /dev/null || command -v yum &> /dev/null; then
+        sudo dnf remove -y gcc make cmake openssl-devel
+        sudo dnf autoremove -y
+    elif command -v apt-get &> /dev/null; then
+        sudo apt-get remove -y build-essential pkg-config cmake libssl-dev
+        sudo apt-get autoremove -y
+    else
+        warn "Could not determine package manager. Please remove build dependencies manually."
+    fi
+    success "Build dependencies have been removed."
+}
+
+uninstall_shoes() {
+    info "Uninstalling 'shoes'..."
+    if [[ -f "$SERVICE_FILE" ]]; then
+        info "Stopping and disabling systemd service..."
+        sudo systemctl stop shoes || true
+        sudo systemctl disable shoes || true
+        sudo rm -f "$SERVICE_FILE"
+        sudo systemctl daemon-reload
+        success "Service removed."
+    fi
+
+    if [[ -f "${INSTALL_DIR}/${BINARY_NAME}" ]]; then
+        info "Removing binary..."
+        sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+        success "Binary removed."
+    fi
+
+    if [[ -d "$CONFIG_DIR" ]]; then
+        info "Removing configuration directory..."
+        sudo rm -rf "$CONFIG_DIR"
+        success "Configuration directory removed."
+    fi
+
+    if [[ -f "$CLIENT_CONFIG_FILE" ]]; then
+        info "Removing client config file..."
+        rm -f "$CLIENT_CONFIG_FILE"
+        success "Client config file removed."
+    fi
+
+    success "'shoes' has been uninstalled."
+}
+
 
 build_from_source() {
     warn "Pre-compiled binary failed to run. Attempting to build from source via Cargo."
@@ -179,7 +226,6 @@ get_latest_release_url() {
 
     if [[ -z "$DOWNLOAD_URL" ]]; then
         warn "Could not find a suitable pre-compiled binary for your system ($TARGET_TRIPLE)."
-        # Do not error out, we will fallback to source build.
         return 1
     fi
 
@@ -191,16 +237,17 @@ get_latest_release_url() {
 download_and_install() {
     info "Attempting to download and install pre-compiled binary..."
     TEMP_DIR=$(mktemp -d)
-    trap 'rm -rf -- "$TEMP_DIR"' EXIT
+    # Use a subshell for trap to avoid it firing on script exit
+    (
+        trap 'rm -rf -- "$TEMP_DIR"' EXIT
+        cd "$TEMP_DIR"
+        curl -sL -o shoes.tar.gz "$DOWNLOAD_URL"
+        tar -xzf shoes.tar.gz
 
-    cd "$TEMP_DIR"
-    curl -sL -o shoes.tar.gz "$DOWNLOAD_URL"
-    tar -xzf shoes.tar.gz
-
-    # Clean up previous attempts
-    sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
-    sudo mv "$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"
-    sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+        sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
+        sudo mv "$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"
+        sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
+    )
     
     if ! "${INSTALL_DIR}/${BINARY_NAME}" --help &> /dev/null; then
        # Fallback to building from source
@@ -630,32 +677,51 @@ main() {
     local LIBC_OVERRIDE=""
     local TEMPLATE_NAME=""
 
-    # Parse named options first
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
+    # Parse all arguments
+    local args=("$@")
+    local positional_args=()
+    for i in "${!args[@]}"; do
+        case "${args[i]}" in
             -h|--help)
                 show_help
                 exit 0
                 ;;
+            --uninstall)
+                uninstall_shoes
+                exit 0
+                ;;
+            --uninstall-build-deps)
+                uninstall_build_deps
+                exit 0
+                ;;
             --libc)
-                if [[ -n "$2" && ("$2" == "gnu" || "$2" == "musl") ]]; then
-                    LIBC_OVERRIDE="$2"
-                    shift 2
+                if [[ -n "${args[i+1]}" && ("${args[i+1]}" == "gnu" || "${args[i+1]}" == "musl") ]]; then
+                    LIBC_OVERRIDE="${args[i+1]}"
+                    # Skip next element
+                    unset 'args[i+1]'
                 else
                     error "Invalid value for --libc. Use 'gnu' or 'musl'."
                 fi
                 ;;
             -*)
-                error "Unknown option: $1"
+                # Check if it is a combined option like --libc=musl
+                if [[ "${args[i]}" == --libc=* ]]; then
+                    LIBC_OVERRIDE="${args[i]#*=}"
+                    if [[ "$LIBC_OVERRIDE" != "gnu" && "$LIBC_OVERRIDE" != "musl" ]]; then
+                        error "Invalid value for --libc. Use 'gnu' or 'musl'."
+                    fi
+                else
+                    error "Unknown option: ${args[i]}"
+                fi
                 ;;
-            *) # Stop parsing options, the rest is the template name
-                break
+            *)
+                positional_args+=("${args[i]}")
                 ;;
         esac
     done
 
-    TEMPLATE_NAME=${1:-vless_over_websocket}
-
+    TEMPLATE_NAME=${positional_args[0]:-vless_over_websocket}
+    
     check_dependencies
     configure_firewall
     detect_system "$LIBC_OVERRIDE"
