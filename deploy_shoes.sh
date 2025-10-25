@@ -173,7 +173,6 @@ download_and_install() {
     local custom_method=$2
     
     info "Step: Downloading and installing binary..."
-    TEMP_DIR
     TEMP_DIR=$(mktemp -d)
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
     cd "$TEMP_DIR"
