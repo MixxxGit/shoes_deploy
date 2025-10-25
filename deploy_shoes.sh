@@ -322,7 +322,7 @@ generate_config() {
     case "$template_name" in
         "vless_over_websocket")
             CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     sni_targets:
@@ -340,7 +340,7 @@ EOF
             ) ;;
         "wss_vmess")
             CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     sni_targets:
@@ -359,7 +359,7 @@ EOF
             ) ;;
         "trojan_over_tls")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     sni_targets:
@@ -373,7 +373,7 @@ EOF
             ) ;;
         "shadowsocks_over_tls_ws")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     sni_targets:
@@ -392,7 +392,7 @@ EOF
             ) ;;
         "https")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     sni_targets:
@@ -407,7 +407,7 @@ EOF
             ) ;;
         "vless_over_quic")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   transport: quic
   quic_settings:
     cert: "__CERT_PATH__"
@@ -420,7 +420,7 @@ EOF
             ) ;;
         "hysteria2")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   transport: quic
   quic_settings:
     cert: "__CERT_PATH__"
@@ -433,7 +433,7 @@ EOF
             ) ;;
         "tuic_v5")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   transport: quic
   quic_settings:
     cert: "__CERT_PATH__"
@@ -446,7 +446,7 @@ EOF
             ) ;;
         "shadow_tls")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:443"
+- address: "0.0.0.0:443"
   protocol:
     type: tls
     shadowtls_targets:
@@ -463,7 +463,7 @@ EOF
             ) ;;
         "snell")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:8443"
+- address: "0.0.0.0:8443"
   protocol:
     type: snell
     cipher: aes-256-gcm
@@ -472,7 +472,7 @@ EOF
             ) ;;
         "vmess")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:8443"
+- address: "0.0.0.0:8443"
   protocol:
     type: vmess
     cipher: auto
@@ -481,7 +481,7 @@ EOF
             ) ;;
         "socks5")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:8443"
+- address: "0.0.0.0:8443"
   protocol:
     type: socks
     username: "__USERNAME__"
@@ -490,7 +490,7 @@ EOF
             ) ;;
         "http")
              CONFIG_CONTENT=$(cat <<EOF
-- bind_location: "0.0.0.0:8443"
+- address: "0.0.0.0:8443"
   protocol:
     type: http
     username: "__USERNAME__"
@@ -633,9 +633,8 @@ main() {
     local TEMPLATE_NAME=""
     local CUSTOM_URL=""
     local CUSTOM_METHOD="GET"
-    local _DOWNLOAD_URL="" # For passing value from function
+    local _DOWNLOAD_URL=""
 
-    # Parse named options first
     local temp_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -670,21 +669,20 @@ main() {
             -*)
                 error "Unknown option: $1"
                 ;;
-            *) # Collect positional arguments
+            *) 
                 temp_args+=("$1")
                 shift
                 ;;
         esac
     done
-    set -- "${temp_args[@]}" # Restore positional arguments
+    set -- "${temp_args[@]}"
 
     TEMPLATE_NAME=${1:-vless_over_websocket}
 
     check_dependencies
     
-    # System detection must happen early for OS-specific logic
     detect_system "$LIBC_OVERRIDE"
-
+    
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
         info "Binary '${BINARY_NAME}' already found at ${INSTALL_DIR}. Skipping download."
     else
