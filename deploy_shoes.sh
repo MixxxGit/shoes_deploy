@@ -38,6 +38,9 @@ CERT_BASE_DIR="/root/cert"
 OS=""
 ARCH=""
 TARGET_TRIPLE=""
+DOMAIN=""
+CERT_PATH=""
+KEY_PATH=""
 
 # --- Colors for Output ---
 C_RESET='\033[0m'
@@ -91,11 +94,9 @@ check_dependencies() {
             missing="$missing $cmd"
         fi
     done
-
     if [[ -n "$missing" ]]; then
         error "Required utilities not found:$missing. Please install them."
     fi
-
     if ! command -v uuidgen &> /dev/null && ! command -v openssl &> /dev/null; then
         error "Either 'uuidgen' or 'openssl' is required to generate UUIDs."
     fi
@@ -155,7 +156,6 @@ get_latest_release_url() {
     local RELEASE_INFO
     RELEASE_INFO=$(curl -s "$API_URL")
     
-    local DOWNLOAD_URL
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
     
     if [[ -z "$DOWNLOAD_URL" ]]; then
@@ -205,7 +205,6 @@ find_domain_and_certs() {
         error "Certificate directory '$CERT_BASE_DIR' not found. Please ensure your certificates are in this directory."
     fi
 
-    local DOMAIN
     DOMAIN=$(find "$CERT_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- | xargs basename)
     
     if [ -z "$DOMAIN" ]; then
@@ -230,8 +229,6 @@ find_domain_and_certs() {
         error "Private key not found for domain $DOMAIN in ${CERT_BASE_DIR}/${DOMAIN}/"
     fi
     
-    # Export for use in other functions
-    export DOMAIN CERT_PATH KEY_PATH
     success "Step complete: Using certificates for domain $DOMAIN"
 }
 
