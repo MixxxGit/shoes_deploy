@@ -42,6 +42,17 @@ DOMAIN=""
 CERT_PATH=""
 KEY_PATH=""
 
+# --- Global Credential Variables ---
+UUID1=""
+PASSWORD_SS=""
+PASSWORD_TROJAN=""
+PASSWORD_HYSTERIA2=""
+PASSWORD_TUIC=""
+PASSWORD_SNELL=""
+DYNAMIC_USERNAME=""
+PASSWORD_SOCKS=""
+PASSWORD_HTTP=""
+
 # --- Colors for Output ---
 C_RESET='\033[0m'
 C_RED='\033[0;31m'
@@ -156,6 +167,7 @@ get_latest_release_url() {
     local RELEASE_INFO
     RELEASE_INFO=$(curl -s "$API_URL")
     
+    local DOWNLOAD_URL
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
     
     if [[ -z "$DOWNLOAD_URL" ]]; then
@@ -303,15 +315,15 @@ generate_config() {
     info "Step: Generating configuration file from template '$template_name'..."
     
     info "Generating credentials..."
-    local UUID1=$(generate_uuid)
-    local PASSWORD_SS=$(generate_ss_password)
-    local PASSWORD_TROJAN=$(generate_password)
-    local PASSWORD_HYSTERIA2=$(generate_password)
-    local PASSWORD_TUIC=$(generate_password)
-    local PASSWORD_SNELL=$(generate_password)
-    local DYNAMIC_USERNAME=$(generate_password)
-    local PASSWORD_SOCKS=$(generate_password)
-    local PASSWORD_HTTP=$(generate_password)
+    UUID1=$(generate_uuid)
+    PASSWORD_SS=$(generate_ss_password)
+    PASSWORD_TROJAN=$(generate_password)
+    PASSWORD_HYSTERIA2=$(generate_password)
+    PASSWORD_TUIC=$(generate_password)
+    PASSWORD_SNELL=$(generate_password)
+    DYNAMIC_USERNAME=$(generate_password)
+    PASSWORD_SOCKS=$(generate_password)
+    PASSWORD_HTTP=$(generate_password)
     info "Credentials generated."
 
     info "Creating config directory ${CONFIG_DIR}..."
@@ -522,9 +534,6 @@ EOF
     info "Writing configuration to ${CONFIG_DIR}/${CONFIG_NAME}..."
     echo "$CONFIG_CONTENT" | sudo tee "${CONFIG_DIR}/${CONFIG_NAME}" > /dev/null
     success "Step complete: Configuration file created."
-
-    # Export variables for client link generation
-    export UUID1 PASSWORD_SS PASSWORD_TROJAN PASSWORD_HYSTERIA2 PASSWORD_TUIC PASSWORD_SNELL DYNAMIC_USERNAME PASSWORD_SOCKS PASSWORD_HTTP
 }
 
 setup_service() {
