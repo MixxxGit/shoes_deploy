@@ -5,6 +5,7 @@
 #
 # Features:
 # - Fully automated, no user input required.
+# - Skips download if the binary is already installed.
 # - Auto-detects OS, architecture, and C library (with manual override).
 # - Supports downloading from a custom URL with a custom HTTP method.
 # - Downloads the latest release from GitHub without 'jq'.
@@ -56,7 +57,17 @@ show_help() {
     echo "Configuration Templates (default: vless_over_websocket):"
     echo "  vless_over_websocket       - VLESS over WebSocket with TLS (recommended)"
     echo "  wss_vmess                  - VMess over WebSocket with TLS"
-    # ... (список шаблонов)
+    echo "  trojan_over_tls            - Trojan over TLS"
+    echo "  shadowsocks_over_tls_ws    - Shadowsocks (2022) over WebSocket with TLS"
+    echo "  https                      - HTTPS Proxy (HTTP over TLS)"
+    echo "  vless_over_quic            - VLESS over QUIC"
+    echo "  hysteria2                  - Hysteria2 (requires QUIC/UDP)"
+    echo "  tuic_v5                    - TUIC v5 (requires QUIC/UDP)"
+    echo "  shadow_tls                 - ShadowTLS v3 (with SOCKS5 as inner protocol)"
+    echo "  snell                      - Snell v3 (over TCP)"
+    echo "  vmess                      - VMess over TCP"
+    echo "  socks5                     - SOCKS5 Proxy (unencrypted)"
+    echo "  http                       - HTTP Proxy (unencrypted)"
     echo ""
     echo "This script must be run as root (or with sudo)."
 }
@@ -100,6 +111,7 @@ detect_system() {
 get_latest_release_url() {
     info "Fetching latest release information from GitHub..."
     API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    
     RELEASE_INFO=$(curl -s "$API_URL")
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
     if [[ -z "$DOWNLOAD_URL" ]]; then error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."; fi
@@ -191,7 +203,82 @@ generate_config() {
       "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: websocket, targets: [{matching_path: "/vless", protocol: {type: vless, user_id: "__UUID1__"}}]}}
 EOF
             ) ;;
-        # ... (здесь находятся все остальные шаблоны, они не изменены и для краткости опущены) ...
+        "wss_vmess") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  protocol:
+    type: tls
+    sni_targets:
+      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: ws, targets: [{matching_path: /vmess, protocol: {type: vmess, cipher: auto, user_id: "__UUID1__"}}]}}
+EOF
+            ) ;;
+        "trojan_over_tls") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  protocol:
+    type: tls
+    sni_targets:
+      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: trojan, password: "__PASSWORD_TROJAN__"}}
+EOF
+            ) ;;
+        "shadowsocks_over_tls_ws") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  protocol:
+    type: tls
+    sni_targets:
+      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: ws, targets: [{matching_path: /shadowsocks, protocol: {type: shadowsocks, cipher: 2022-blake3-aes-256-gcm, password: "__PASSWORD_SS__"}}]}}
+EOF
+            ) ;;
+        "https") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  protocol:
+    type: tls
+    sni_targets:
+      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: http, username: "__USERNAME__", password: "__PASSWORD_HTTP__"}}
+EOF
+            ) ;;
+        "vless_over_quic") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  transport: quic
+  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__", alpn_protocols: ["h3"]}
+  protocol: {type: vless, user_id: "__UUID1__"}
+EOF
+            ) ;;
+        "hysteria2") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  transport: quic
+  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__", alpn_protocols: ["h3"]}
+  protocol: {type: hysteria2, password: "__PASSWORD_HYSTERIA2__"}
+EOF
+            ) ;;
+        "tuic_v5") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  transport: quic
+  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__"}
+  protocol: {type: tuicv5, uuid: "__UUID1__", password: "__PASSWORD_TUIC__"}
+EOF
+            ) ;;
+        "shadow_tls") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:443"
+  protocol:
+    type: tls
+    shadowtls_targets:
+      __DOMAIN__: {password: "__PASSWORD_TROJAN__", handshake: {cert: "__CERT_PATH__", key: "__KEY_PATH__"}, protocol: {type: socks, username: "__USERNAME__", password: "__PASSWORD_SOCKS__"}}
+EOF
+            ) ;;
+        "snell") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:8443"
+  protocol: {type: snell, cipher: aes-256-gcm, password: "__PASSWORD_SNELL__"}
+EOF
+            ) ;;
+        "vmess") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:8443"
+  protocol: {type: vmess, cipher: auto, user_id: "__UUID1__"}
+EOF
+            ) ;;
+        "socks5") CONFIG_CONTENT=$(cat <<EOF
+- bind_location: "0.0.0.0:8443"
+  protocol: {type: socks, username: "__USERNAME__", password: "__PASSWORD_SOCKS__"}
+EOF
+            ) ;;
         "http") CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:8443"
   protocol: {type: http, username: "__USERNAME__", password: "__PASSWORD_HTTP__"}
@@ -239,13 +326,21 @@ generate_client_link() {
         "vless_over_websocket") link="vless://${UUID1}@${DOMAIN}:443?encryption=none&security=tls&type=ws&host=${DOMAIN}&path=%2Fvless#${tag}" ;;
         "wss_vmess") local vmess_json="{\"v\":\"2\",\"ps\":\"${tag}\",\"add\":\"${DOMAIN}\",\"port\":\"443\",\"id\":\"${UUID1}\",\"aid\":\"0\",\"net\":\"ws\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"path\":\"/vmess\",\"tls\":\"tls\",\"sni\":\"${DOMAIN}\"}"; link="vmess://$(echo -n "$vmess_json" | base64 -w 0)" ;;
         "trojan_over_tls") link="trojan://${PASSWORD_TROJAN}@${DOMAIN}:443?security=tls&sni=${DOMAIN}#${tag}" ;;
-        # ... (остальные генераторы ссылок, не изменены) ...
+        "shadowsocks_over_tls_ws") local plugin_opts="tls;host=${DOMAIN};path=/shadowsocks"; link="ss://$(echo -n "2022-blake3-aes-256-gcm:${PASSWORD_SS}" | base64 -w 0)@${DOMAIN}:443?plugin=v2ray-plugin;obfs=websocket;obfs-opts=${plugin_opts}#${tag}" ;;
+        "hysteria2") link="hysteria2://${PASSWORD_HYSTERIA2}@${DOMAIN}:443?sni=${DOMAIN}&alpn=h3#${tag}" ;;
+        "tuic_v5") link="tuic://${UUID1}:${PASSWORD_TUIC}@${DOMAIN}:443?sni=${DOMAIN}#${tag}-tuic5" ;;
+        "https") link="http://${DYNAMIC_USERNAME}:${PASSWORD_HTTP}@${DOMAIN}:443#${tag}-https" ;;
+        "http") link="http://${DYNAMIC_USERNAME}:${PASSWORD_HTTP}@${DOMAIN}:8443#${tag}-http" ;;
+        "socks5") link="socks5://${DYNAMIC_USERNAME}:${PASSWORD_SOCKS}@${DOMAIN}:8443#${tag}-socks5" ;;
+        "vmess") local vmess_json="{\"v\":\"2\",\"ps\":\"${tag}\",\"add\":\"${DOMAIN}\",\"port\":\"8443\",\"id\":\"${UUID1}\",\"aid\":\"0\",\"net\":\"tcp\",\"type\":\"none\",\"host\":\"${DOMAIN}\",\"tls\":\"\",\"sni\":\"\"}"; link="vmess://$(echo -n "$vmess_json" | base64 -w 0)" ;;
         *) link="Automatic link generation is not supported for template '$template_name'.\nUse these parameters for manual configuration:"; case "$template_name" in "shadow_tls") link+="\nProtocol: ShadowTLS v3 + SOCKS5\nServer: ${DOMAIN}\nPort: 443\nShadowTLS Password: ${PASSWORD_TROJAN}\nSNI: ${DOMAIN}\nSOCKS5 Username: ${DYNAMIC_USERNAME}\nSOCKS5 Password: ${PASSWORD_SOCKS}";; "snell") link+="\nProtocol: Snell v3\nServer: ${DOMAIN}\nPort: 8443\nPSK: ${PASSWORD_SNELL}\nCipher: aes-256-gcm";; esac ;;
     esac
     echo -e "$link" | sudo tee "$CLIENT_CONFIG_FILE" > /dev/null
     success "Client configuration saved to: $CLIENT_CONFIG_FILE"
     echo -e "\n${C_GREEN}--- Client Configuration ---${C_RESET}\n${C_YELLOW}$(cat $CLIENT_CONFIG_FILE)${C_RESET}\n${C_GREEN}----------------------------${C_RESET}\n"
 }
+
+# --- Main Execution ---
 
 main() {
     if [[ $EUID -ne 0 ]]; then error "This script must be run as root (or with sudo)."; fi
@@ -256,6 +351,7 @@ main() {
     local CUSTOM_METHOD="GET"
 
     # Parse named options first
+    local temp_args=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help) show_help; exit 0;;
@@ -263,21 +359,26 @@ main() {
             --custom-url) if [[ -n "$2" ]]; then CUSTOM_URL="$2"; shift 2; else error "Missing value for --custom-url."; fi;;
             --custom-method) if [[ -n "$2" ]]; then CUSTOM_METHOD="$2"; shift 2; else error "Missing value for --custom-method."; fi;;
             -*) error "Unknown option: $1";;
-            *) break;;
+            *) temp_args+=("$1"); shift;; # Collect positional arguments
         esac
     done
+    set -- "${temp_args[@]}" # Restore positional arguments
 
     TEMPLATE_NAME=${1:-vless_over_websocket}
 
     check_dependencies
     configure_firewall
     
-    if [[ -z "$CUSTOM_URL" ]]; then
-        detect_system "$LIBC_OVERRIDE"
-        get_latest_release_url
+    if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
+        info "Binary '${BINARY_NAME}' already found at ${INSTALL_DIR}. Skipping download."
+    else
+        if [[ -z "$CUSTOM_URL" ]]; then
+            detect_system "$LIBC_OVERRIDE"
+            get_latest_release_url
+        fi
+        download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     fi
     
-    download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     find_domain_and_certs
     generate_config "$TEMPLATE_NAME"
     setup_service
