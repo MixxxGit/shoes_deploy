@@ -5,7 +5,7 @@
 #
 # Features:
 # - Fully automated, no user input required.
-# - Auto-detects OS, architecture, and C library.
+# - Auto-detects OS, architecture, and prefers the 'musl' static build on Linux for maximum compatibility.
 # - Downloads the latest release from GitHub without 'jq'.
 # - Auto-configures the system firewall (ufw or firewalld) if active.
 # - Auto-finds Let's Encrypt domain and certs (selects the most recent one).
@@ -94,11 +94,8 @@ detect_system() {
     case "$OS" in
         Linux)
             OS_TYPE="unknown-linux"
-            if ldd --version 2>/dev/null | grep -q "musl"; then
-                LIBC_TYPE="musl"
-            else
-                LIBC_TYPE="gnu"
-            fi
+            # Prefer 'musl' (static build) for Linux to avoid glibc version issues.
+            LIBC_TYPE="musl"
             ;;
         Darwin)
             OS_TYPE="apple-darwin"
@@ -117,6 +114,7 @@ detect_system() {
     success "System detected: $TARGET_TRIPLE"
 }
 
+
 get_latest_release_url() {
     info "Fetching latest release information..."
     API_URL="https://api.github.com/repos/${REPO}/releases/latest"
@@ -125,7 +123,15 @@ get_latest_release_url() {
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
 
     if [[ -z "$DOWNLOAD_URL" ]]; then
-        error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
+        # Fallback to 'gnu' if 'musl' build is not found
+        if [[ "$LIBC_TYPE" == "musl" ]]; then
+            warn "MUSL build not found, falling back to GNU build..."
+            TARGET_TRIPLE="${ARCH_TYPE}-${OS_TYPE}-gnu"
+            DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
+        fi
+        if [[ -z "$DOWNLOAD_URL" ]]; then
+            error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
+        fi
     fi
 
     TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | awk -F '"' '{print $4}')
@@ -194,7 +200,7 @@ configure_firewall() {
         done
         success "UFW configuration is complete."
     elif command -v firewall-cmd &> /dev/null; then
-        if ! sudo firewall-cmd --state &> /dev/null; then
+        if ! sudo systemctl is-active --quiet firewalld; then
             warn "firewalld is not running. Skipping firewall configuration. Please manage ports manually if needed."
             return
         fi
@@ -240,7 +246,6 @@ generate_password() {
 }
 
 generate_ss_password() {
-    # For Shadowsocks 2022, the key must be Base64 encoded
     openssl rand -base64 32
 }
 
