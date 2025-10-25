@@ -4,12 +4,13 @@
 # https://github.com/cfal/shoes
 #
 # Features:
+# - Tries to use pre-compiled binaries first.
+# - **Fallback to source compilation** via 'cargo install' if binaries fail.
+# - Installs Rust and build dependencies automatically if needed.
 # - Fully automated, no user input required.
 # - Auto-detects OS, architecture, and C library (with manual override).
-# - Downloads the latest release from GitHub without 'jq'.
 # - Auto-configures the system firewall (ufw or firewalld) if active.
-# - Auto-finds Let's Encrypt domain and certs (selects the most recent one).
-# - Generates configuration from templates with random credentials.
+# - Auto-finds Let's Encrypt domain and certs.
 # - Installs and runs as a systemd service.
 # - Generates a client configuration link/data.
 
@@ -68,6 +69,52 @@ show_help() {
     echo ""
     echo "This script must be run as root (or with sudo)."
 }
+
+install_build_deps() {
+    info "Installing build dependencies..."
+    if command -v dnf &> /dev/null; then
+        sudo dnf groupinstall -y 'Development Tools'
+        sudo dnf install -y cmake openssl-devel
+    elif command -v yum &> /dev/null; then
+        sudo yum groupinstall -y 'Development Tools'
+        sudo yum install -y cmake openssl-devel
+    elif command -v apt-get &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y build-essential pkg-config cmake libssl-dev
+    else
+        warn "Could not determine package manager. Please install build tools (gcc, make, cmake, openssl-devel/libssl-dev) manually."
+    fi
+    success "Build dependencies installed."
+}
+
+build_from_source() {
+    warn "Pre-compiled binary failed to run. Attempting to build from source via Cargo."
+    info "This process may take several minutes."
+
+    install_build_deps
+
+    if ! command -v cargo &> /dev/null; then
+        info "Rust/Cargo not found. Installing via rustup..."
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        # The cargo env needs to be sourced for the current script
+        # As we run with sudo, $HOME is /root
+        source "/root/.cargo/env"
+        success "Rust toolchain installed."
+    fi
+
+    info "Compiling and installing 'shoes' from source via 'cargo install'..."
+    cargo install shoes
+    
+    info "Moving compiled binary to ${INSTALL_DIR}..."
+    sudo mv "/root/.cargo/bin/shoes" "${INSTALL_DIR}/${BINARY_NAME}"
+
+    if ! "${INSTALL_DIR}/${BINARY_NAME}" --help &> /dev/null; then
+        error "Failed to build from source as well. Please check compilation logs. Aborting."
+    fi
+
+    success "Successfully built and installed 'shoes' from source."
+}
+
 
 check_dependencies() {
     info "Checking dependencies..."
@@ -131,15 +178,18 @@ get_latest_release_url() {
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
 
     if [[ -z "$DOWNLOAD_URL" ]]; then
-        error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
+        warn "Could not find a suitable pre-compiled binary for your system ($TARGET_TRIPLE)."
+        # Do not error out, we will fallback to source build.
+        return 1
     fi
 
     TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | awk -F '"' '{print $4}')
     success "Found latest version: $TAG. Download URL: $DOWNLOAD_URL"
+    return 0
 }
 
 download_and_install() {
-    info "Downloading and installing binary..."
+    info "Attempting to download and install pre-compiled binary..."
     TEMP_DIR=$(mktemp -d)
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
 
@@ -147,14 +197,17 @@ download_and_install() {
     curl -sL -o shoes.tar.gz "$DOWNLOAD_URL"
     tar -xzf shoes.tar.gz
 
+    # Clean up previous attempts
+    sudo rm -f "${INSTALL_DIR}/${BINARY_NAME}"
     sudo mv "$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"
     sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
     
     if ! "${INSTALL_DIR}/${BINARY_NAME}" --help &> /dev/null; then
-       error "The installed binary seems to be broken or incompatible."
+       # Fallback to building from source
+       build_from_source
+    else
+        success "Binary '${BINARY_NAME}' installed and verified."
     fi
-
-    success "Binary '${BINARY_NAME}' installed to ${INSTALL_DIR}"
 }
 
 find_domain_and_certs() {
@@ -606,8 +659,14 @@ main() {
     check_dependencies
     configure_firewall
     detect_system "$LIBC_OVERRIDE"
-    get_latest_release_url
-    download_and_install
+
+    if get_latest_release_url; then
+        download_and_install
+    else
+        # If no binary was found, go directly to source build
+        build_from_source
+    fi
+    
     find_domain_and_certs
     generate_config "$TEMPLATE_NAME"
     setup_service
