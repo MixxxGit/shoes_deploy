@@ -37,6 +37,7 @@ CERT_BASE_DIR="/root/cert"
 # --- Global System Variables ---
 OS=""
 ARCH=""
+TARGET_TRIPLE=""
 
 # --- Colors for Output ---
 C_RESET='\033[0m'
@@ -90,9 +91,11 @@ check_dependencies() {
             missing="$missing $cmd"
         fi
     done
+
     if [[ -n "$missing" ]]; then
         error "Required utilities not found:$missing. Please install them."
     fi
+
     if ! command -v uuidgen &> /dev/null && ! command -v openssl &> /dev/null; then
         error "Either 'uuidgen' or 'openssl' is required to generate UUIDs."
     fi
@@ -109,7 +112,7 @@ detect_system() {
     local LIBC_TYPE=""
 
     case "$OS" in
-        Linux)
+        "Linux")
             OS_TYPE="unknown-linux"
             if [[ -n "$LIBC_OVERRIDE" ]]; then
                 LIBC_TYPE="$LIBC_OVERRIDE"
@@ -120,7 +123,7 @@ detect_system() {
                 LIBC_TYPE="gnu"
             fi
             ;;
-        Darwin)
+        "Darwin")
             OS_TYPE="apple-darwin"
             LIBC_TYPE=""
             ;;
@@ -130,10 +133,10 @@ detect_system() {
     esac
 
     case "$ARCH" in
-        x86_64)
+        "x86_64")
             ARCH_TYPE="x86_64"
             ;;
-        aarch64 | arm64)
+        "aarch64" | "arm64")
             ARCH_TYPE="aarch64"
             ;;
         *)
@@ -147,17 +150,23 @@ detect_system() {
 
 get_latest_release_url() {
     info "Step: Fetching latest release information from GitHub..."
-    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    local API_URL="https://api.github.com/repos/${REPO}/releases/latest"
     
+    local RELEASE_INFO
     RELEASE_INFO=$(curl -s "$API_URL")
+    
+    local DOWNLOAD_URL
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
     
     if [[ -z "$DOWNLOAD_URL" ]]; then
         error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
     fi
 
+    local TAG
     TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | awk -F '"' '{print $4}')
     success "Step complete: Found latest version: $TAG"
+    # Return value through global variable
+    _DOWNLOAD_URL=$DOWNLOAD_URL
 }
 
 download_and_install() {
@@ -165,6 +174,7 @@ download_and_install() {
     local custom_method=$2
     
     info "Step: Downloading and installing binary..."
+    local TEMP_DIR
     TEMP_DIR=$(mktemp -d)
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
     cd "$TEMP_DIR"
@@ -173,8 +183,8 @@ download_and_install() {
         info "Using custom URL: $custom_url with method $custom_method"
         curl -sL -X "$custom_method" -o "$BINARY_NAME" "$custom_url"
     else
-        info "Downloading from official GitHub release: $DOWNLOAD_URL"
-        curl -sL -o shoes.tar.gz "$DOWNLOAD_URL"
+        info "Downloading from official GitHub release: $_DOWNLOAD_URL"
+        curl -sL -o shoes.tar.gz "$_DOWNLOAD_URL"
         tar -xzf shoes.tar.gz
     fi
     
@@ -195,6 +205,7 @@ find_domain_and_certs() {
         error "Certificate directory '$CERT_BASE_DIR' not found. Please ensure your certificates are in this directory."
     fi
 
+    local DOMAIN
     DOMAIN=$(find "$CERT_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- | xargs basename)
     
     if [ -z "$DOMAIN" ]; then
@@ -202,7 +213,7 @@ find_domain_and_certs() {
     fi
 
     info "Automatically selected the most recently updated domain: $DOMAIN"
-
+    
     if [ -f "${CERT_BASE_DIR}/${DOMAIN}/fullchain.cer" ]; then
         CERT_PATH="${CERT_BASE_DIR}/${DOMAIN}/fullchain.cer"
     elif [ -f "${CERT_BASE_DIR}/${DOMAIN}/fullchain.pem" ]; then
@@ -219,12 +230,14 @@ find_domain_and_certs() {
         error "Private key not found for domain $DOMAIN in ${CERT_BASE_DIR}/${DOMAIN}/"
     fi
     
+    # Export for use in other functions
+    export DOMAIN CERT_PATH KEY_PATH
     success "Step complete: Using certificates for domain $DOMAIN"
 }
 
 configure_firewall() {
     info "Step: Configuring firewall..."
-    PORTS_TO_OPEN=("80" "443" "8443")
+    local PORTS_TO_OPEN=("80" "443" "8443")
     if command -v ufw &> /dev/null; then
         if ! sudo ufw status | grep -q "Status: active"; then
             warn "UFW is inactive. Skipping firewall configuration. Please manage ports manually if needed."
@@ -245,7 +258,7 @@ configure_firewall() {
             warn "firewalld is not running. Skipping firewall configuration. Please manage ports manually if needed."
             return
         fi
-        reload_needed=false
+        local reload_needed=false
         for port in "${PORTS_TO_OPEN[@]}"; do
             if ! sudo firewall-cmd --query-port="$port/tcp" --permanent &> /dev/null; then
                 info "Opening port $port/tcp..."
@@ -293,21 +306,22 @@ generate_config() {
     info "Step: Generating configuration file from template '$template_name'..."
     
     info "Generating credentials..."
-    UUID1=$(generate_uuid)
-    PASSWORD_SS=$(generate_ss_password)
-    PASSWORD_TROJAN=$(generate_password)
-    PASSWORD_HYSTERIA2=$(generate_password)
-    PASSWORD_TUIC=$(generate_password)
-    PASSWORD_SNELL=$(generate_password)
-    DYNAMIC_USERNAME=$(generate_password)
-    PASSWORD_SOCKS=$(generate_password)
-    PASSWORD_HTTP=$(generate_password)
+    local UUID1=$(generate_uuid)
+    local PASSWORD_SS=$(generate_ss_password)
+    local PASSWORD_TROJAN=$(generate_password)
+    local PASSWORD_HYSTERIA2=$(generate_password)
+    local PASSWORD_TUIC=$(generate_password)
+    local PASSWORD_SNELL=$(generate_password)
+    local DYNAMIC_USERNAME=$(generate_password)
+    local PASSWORD_SOCKS=$(generate_password)
+    local PASSWORD_HTTP=$(generate_password)
     info "Credentials generated."
 
     info "Creating config directory ${CONFIG_DIR}..."
     sudo mkdir -p "$CONFIG_DIR"
     
     info "Selecting template content..."
+    local CONFIG_CONTENT=""
     case "$template_name" in
         "vless_over_websocket")
             CONFIG_CONTENT=$(cat <<EOF
@@ -511,12 +525,16 @@ EOF
     info "Writing configuration to ${CONFIG_DIR}/${CONFIG_NAME}..."
     echo "$CONFIG_CONTENT" | sudo tee "${CONFIG_DIR}/${CONFIG_NAME}" > /dev/null
     success "Step complete: Configuration file created."
+
+    # Export variables for client link generation
+    export UUID1 PASSWORD_SS PASSWORD_TROJAN PASSWORD_HYSTERIA2 PASSWORD_TUIC PASSWORD_SNELL DYNAMIC_USERNAME PASSWORD_SOCKS PASSWORD_HTTP
 }
 
 setup_service() {
     info "Step: Setting up system service..."
     if [[ "$OS" == "Linux" ]] && command -v systemctl &> /dev/null; then
         info "Creating systemd service file..."
+        local SERVICE_CONTENT
         SERVICE_CONTENT=$(cat <<EOF
 [Unit]
 Description=Shoes Proxy Server
@@ -618,6 +636,7 @@ main() {
     local TEMPLATE_NAME=""
     local CUSTOM_URL=""
     local CUSTOM_METHOD="GET"
+    local _DOWNLOAD_URL="" # For passing value from function
 
     # Parse named options first
     local temp_args=()
@@ -666,18 +685,15 @@ main() {
 
     check_dependencies
     
-    if [[ -z "$CUSTOM_URL" ]]; then
-        detect_system "$LIBC_OVERRIDE"
-        get_latest_release_url
-    else
-        # Set dummy values if using custom URL to satisfy `nounset`
-        OS="Linux" 
-        ARCH="unknown"
-    fi
-    
+    # System detection must happen early for OS-specific logic
+    detect_system "$LIBC_OVERRIDE"
+
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
         info "Binary '${BINARY_NAME}' already found at ${INSTALL_DIR}. Skipping download."
     else
+        if [[ -z "$CUSTOM_URL" ]]; then
+            get_latest_release_url
+        fi
         download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     fi
     
