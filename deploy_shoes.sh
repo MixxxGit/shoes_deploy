@@ -5,7 +5,7 @@
 #
 # Features:
 # - Fully automated, no user input required.
-# - Auto-detects OS, architecture, and prefers the 'musl' static build on Linux for maximum compatibility.
+# - Auto-detects OS, architecture, and C library (with manual override).
 # - Downloads the latest release from GitHub without 'jq'.
 # - Auto-configures the system firewall (ufw or firewalld) if active.
 # - Auto-finds Let's Encrypt domain and certs (selects the most recent one).
@@ -47,7 +47,9 @@ show_help() {
     echo "Usage: $0 [OPTIONS] [CONFIG_TEMPLATE]"
     echo ""
     echo "Options:"
-    echo "  -h, --help    Show this help message and exit."
+    echo "  -h, --help        Show this help message and exit."
+    echo "  --libc <type>     Manually specify the C library ('gnu' or 'musl')."
+    echo "                    Defaults to automatic detection if not provided."
     echo ""
     echo "Configuration Templates (default: vless_over_websocket):"
     echo "  vless_over_websocket       - VLESS over WebSocket with TLS (recommended)"
@@ -87,6 +89,7 @@ check_dependencies() {
 }
 
 detect_system() {
+    local LIBC_OVERRIDE=$1
     info "Detecting system parameters..."
     OS=$(uname -s)
     ARCH=$(uname -m)
@@ -94,8 +97,14 @@ detect_system() {
     case "$OS" in
         Linux)
             OS_TYPE="unknown-linux"
-            # Prefer 'musl' (static build) for Linux to avoid glibc version issues.
-            LIBC_TYPE="musl"
+            if [[ -n "$LIBC_OVERRIDE" ]]; then
+                LIBC_TYPE="$LIBC_OVERRIDE"
+                info "Using user-provided LIBC override: '$LIBC_TYPE'"
+            elif ldd --version 2>/dev/null | grep -q "musl"; then
+                LIBC_TYPE="musl"
+            else
+                LIBC_TYPE="gnu"
+            fi
             ;;
         Darwin)
             OS_TYPE="apple-darwin"
@@ -114,7 +123,6 @@ detect_system() {
     success "System detected: $TARGET_TRIPLE"
 }
 
-
 get_latest_release_url() {
     info "Fetching latest release information..."
     API_URL="https://api.github.com/repos/${REPO}/releases/latest"
@@ -123,15 +131,7 @@ get_latest_release_url() {
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
 
     if [[ -z "$DOWNLOAD_URL" ]]; then
-        # Fallback to 'gnu' if 'musl' build is not found
-        if [[ "$LIBC_TYPE" == "musl" ]]; then
-            warn "MUSL build not found, falling back to GNU build..."
-            TARGET_TRIPLE="${ARCH_TYPE}-${OS_TYPE}-gnu"
-            DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
-        fi
-        if [[ -z "$DOWNLOAD_URL" ]]; then
-            error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
-        fi
+        error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
     fi
 
     TAG=$(echo "$RELEASE_INFO" | grep '"tag_name"' | awk -F '"' '{print $4}')
@@ -200,7 +200,7 @@ configure_firewall() {
         done
         success "UFW configuration is complete."
     elif command -v firewall-cmd &> /dev/null; then
-        if ! sudo systemctl is-active --quiet firewalld; then
+        if ! sudo firewall-cmd --state &> /dev/null; then
             warn "firewalld is not running. Skipping firewall configuration. Please manage ports manually if needed."
             return
         fi
@@ -574,17 +574,38 @@ main() {
        error "This script must be run as root (or with sudo)."
     fi
 
-    TEMPLATE_NAME="vless_over_websocket"
-    if [[ "$1" == "-h" || "$1" == "--help" ]]; then
-        show_help
-        exit 0
-    elif [[ -n "$1" ]]; then
-        TEMPLATE_NAME=$1
-    fi
+    local LIBC_OVERRIDE=""
+    local TEMPLATE_NAME=""
+
+    # Parse named options first
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --libc)
+                if [[ -n "$2" && ("$2" == "gnu" || "$2" == "musl") ]]; then
+                    LIBC_OVERRIDE="$2"
+                    shift 2
+                else
+                    error "Invalid value for --libc. Use 'gnu' or 'musl'."
+                fi
+                ;;
+            -*)
+                error "Unknown option: $1"
+                ;;
+            *) # Stop parsing options, the rest is the template name
+                break
+                ;;
+        esac
+    done
+
+    TEMPLATE_NAME=${1:-vless_over_websocket}
 
     check_dependencies
     configure_firewall
-    detect_system
+    detect_system "$LIBC_OVERRIDE"
     get_latest_release_url
     download_and_install
     find_domain_and_certs
