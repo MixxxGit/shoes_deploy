@@ -11,7 +11,7 @@
 # - Downloads the latest release from GitHub without 'jq'.
 # - Auto-configures the system firewall (ufw or firewalld) if active.
 # - Auto-finds domain and certificates (selects the most recent one).
-# - Generates configuration from templates with random credentials.
+# - Generates clean, multi-line YAML configuration from templates.
 # - Installs and runs as a systemd service.
 # - Generates a client configuration link/data.
 
@@ -33,6 +33,10 @@ BINARY_NAME="shoes"
 CONFIG_NAME="config.yml"
 CLIENT_CONFIG_FILE="client_config.txt"
 CERT_BASE_DIR="/root/cert"
+
+# --- Global System Variables ---
+OS=""
+ARCH=""
 
 # --- Colors for Output ---
 C_RESET='\033[0m'
@@ -81,16 +85,14 @@ show_help() {
 check_dependencies() {
     info "Step: Checking dependencies..."
     local missing=""
-    for cmd in curl tar gzip awk grep sed tr fold head; do
+    for cmd in curl tar gzip awk grep sed tr head; do
         if ! command -v "$cmd" &> /dev/null; then
             missing="$missing $cmd"
         fi
     done
-
     if [[ -n "$missing" ]]; then
         error "Required utilities not found:$missing. Please install them."
     fi
-
     if ! command -v uuidgen &> /dev/null && ! command -v openssl &> /dev/null; then
         error "Either 'uuidgen' or 'openssl' is required to generate UUIDs."
     fi
@@ -102,6 +104,9 @@ detect_system() {
     info "Step: Detecting system parameters..."
     OS=$(uname -s)
     ARCH=$(uname -m)
+    local OS_TYPE=""
+    local ARCH_TYPE=""
+    local LIBC_TYPE=""
 
     case "$OS" in
         Linux)
@@ -276,7 +281,6 @@ generate_uuid() {
 }
 
 generate_password() {
-    # Read a limited number of bytes from /dev/urandom to avoid broken pipe with `head -n`
     head -c 32 /dev/urandom | LC_ALL=C tr -dc 'a-zA-Z0-9' | head -c 16
 }
 
@@ -311,7 +315,16 @@ generate_config() {
   protocol:
     type: tls
     sni_targets:
-      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: websocket, targets: [{matching_path: "/vless", protocol: {type: vless, user_id: "__UUID1__"}}]}}
+      "__DOMAIN__":
+        cert: "__CERT_PATH__"
+        key: "__KEY_PATH__"
+        protocol:
+          type: websocket
+          targets:
+            - matching_path: "/vless"
+              protocol:
+                type: vless
+                user_id: "__UUID1__"
 EOF
             ) ;;
         "wss_vmess")
@@ -320,7 +333,17 @@ EOF
   protocol:
     type: tls
     sni_targets:
-      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: ws, targets: [{matching_path: /vmess, protocol: {type: vmess, cipher: auto, user_id: "__UUID1__"}}]}}
+      "__DOMAIN__":
+        cert: "__CERT_PATH__"
+        key: "__KEY_PATH__"
+        protocol:
+          type: ws
+          targets:
+            - matching_path: /vmess
+              protocol:
+                type: vmess
+                cipher: auto
+                user_id: "__UUID1__"
 EOF
             ) ;;
         "trojan_over_tls")
@@ -329,7 +352,12 @@ EOF
   protocol:
     type: tls
     sni_targets:
-      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: trojan, password: "__PASSWORD_TROJAN__"}}
+      "__DOMAIN__":
+        cert: "__CERT_PATH__"
+        key: "__KEY_PATH__"
+        protocol:
+          type: trojan
+          password: "__PASSWORD_TROJAN__"
 EOF
             ) ;;
         "shadowsocks_over_tls_ws")
@@ -338,7 +366,17 @@ EOF
   protocol:
     type: tls
     sni_targets:
-      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: ws, targets: [{matching_path: /shadowsocks, protocol: {type: shadowsocks, cipher: 2022-blake3-aes-256-gcm, password: "__PASSWORD_SS__"}}]}}
+      "__DOMAIN__":
+        cert: "__CERT_PATH__"
+        key: "__KEY_PATH__"
+        protocol:
+          type: ws
+          targets:
+          - matching_path: /shadowsocks
+            protocol:
+              type: shadowsocks
+              cipher: 2022-blake3-aes-256-gcm
+              password: "__PASSWORD_SS__"
 EOF
             ) ;;
         "https")
@@ -347,31 +385,52 @@ EOF
   protocol:
     type: tls
     sni_targets:
-      "__DOMAIN__": {cert: "__CERT_PATH__", key: "__KEY_PATH__", protocol: {type: http, username: "__USERNAME__", password: "__PASSWORD_HTTP__"}}
+      "__DOMAIN__":
+        cert: "__CERT_PATH__"
+        key: "__KEY_PATH__"
+        protocol:
+          type: http
+          username: "__USERNAME__"
+          password: "__PASSWORD_HTTP__"
 EOF
             ) ;;
         "vless_over_quic")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:443"
   transport: quic
-  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__", alpn_protocols: ["h3"]}
-  protocol: {type: vless, user_id: "__UUID1__"}
+  quic_settings:
+    cert: "__CERT_PATH__"
+    key: "__KEY_PATH__"
+    alpn_protocols: ["h3"]
+  protocol:
+    type: vless
+    user_id: "__UUID1__"
 EOF
             ) ;;
         "hysteria2")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:443"
   transport: quic
-  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__", alpn_protocols: ["h3"]}
-  protocol: {type: hysteria2, password: "__PASSWORD_HYSTERIA2__"}
+  quic_settings:
+    cert: "__CERT_PATH__"
+    key: "__KEY_PATH__"
+    alpn_protocols: ["h3"]
+  protocol:
+    type: hysteria2
+    password: "__PASSWORD_HYSTERIA2__"
 EOF
             ) ;;
         "tuic_v5")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:443"
   transport: quic
-  quic_settings: {cert: "__CERT_PATH__", key: "__KEY_PATH__"}
-  protocol: {type: tuicv5, uuid: "__UUID1__", password: "__PASSWORD_TUIC__"}
+  quic_settings:
+    cert: "__CERT_PATH__"
+    key: "__KEY_PATH__"
+  protocol:
+    type: tuicv5
+    uuid: "__UUID1__"
+    password: "__PASSWORD_TUIC__"
 EOF
             ) ;;
         "shadow_tls")
@@ -380,31 +439,51 @@ EOF
   protocol:
     type: tls
     shadowtls_targets:
-      __DOMAIN__: {password: "__PASSWORD_TROJAN__", handshake: {cert: "__CERT_PATH__", key: "__KEY_PATH__"}, protocol: {type: socks, username: "__USERNAME__", password: "__PASSWORD_SOCKS__"}}
+      __DOMAIN__:
+        password: "__PASSWORD_TROJAN__"
+        handshake:
+          cert: "__CERT_PATH__"
+          key: "__KEY_PATH__"
+        protocol:
+          type: socks
+          username: "__USERNAME__"
+          password: "__PASSWORD_SOCKS__"
 EOF
             ) ;;
         "snell")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:8443"
-  protocol: {type: snell, cipher: aes-256-gcm, password: "__PASSWORD_SNELL__"}
+  protocol:
+    type: snell
+    cipher: aes-256-gcm
+    password: "__PASSWORD_SNELL__"
 EOF
             ) ;;
         "vmess")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:8443"
-  protocol: {type: vmess, cipher: auto, user_id: "__UUID1__"}
+  protocol:
+    type: vmess
+    cipher: auto
+    user_id: "__UUID1__"
 EOF
             ) ;;
         "socks5")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:8443"
-  protocol: {type: socks, username: "__USERNAME__", password: "__PASSWORD_SOCKS__"}
+  protocol:
+    type: socks
+    username: "__USERNAME__"
+    password: "__PASSWORD_SOCKS__"
 EOF
             ) ;;
         "http")
              CONFIG_CONTENT=$(cat <<EOF
 - bind_location: "0.0.0.0:8443"
-  protocol: {type: http, username: "__USERNAME__", password: "__PASSWORD_HTTP__"}
+  protocol:
+    type: http
+    username: "__USERNAME__"
+    password: "__PASSWORD_HTTP__"
 EOF
             ) ;;
         *)
@@ -586,18 +665,23 @@ main() {
     TEMPLATE_NAME=${1:-vless_over_websocket}
 
     check_dependencies
-    configure_firewall
+    
+    if [[ -z "$CUSTOM_URL" ]]; then
+        detect_system "$LIBC_OVERRIDE"
+        get_latest_release_url
+    else
+        # Set dummy values if using custom URL to satisfy `nounset`
+        OS="Linux" 
+        ARCH="unknown"
+    fi
     
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
         info "Binary '${BINARY_NAME}' already found at ${INSTALL_DIR}. Skipping download."
     else
-        if [[ -z "$CUSTOM_URL" ]]; then
-            detect_system "$LIBC_OVERRIDE"
-            get_latest_release_url
-        fi
         download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     fi
     
+    configure_firewall
     find_domain_and_certs
     generate_config "$TEMPLATE_NAME"
     setup_service
