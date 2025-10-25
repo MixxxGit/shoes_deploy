@@ -7,8 +7,8 @@
 # - Fully automated, no user input required.
 # - Auto-detects OS, architecture, and C library.
 # - Downloads the latest release from GitHub without 'jq'.
+# - Auto-configures the system firewall (ufw or firewalld) if active.
 # - Auto-finds Let's Encrypt domain and certs (selects the most recent one).
-# - Auto-configures the system firewall (ufw or firewalld).
 # - Generates configuration from templates with random credentials.
 # - Installs and runs as a systemd service.
 # - Generates a client configuration link/data.
@@ -121,7 +121,6 @@ get_latest_release_url() {
     info "Fetching latest release information..."
     API_URL="https://api.github.com/repos/${REPO}/releases/latest"
     
-    # Use grep and awk to parse JSON response instead of jq
     RELEASE_INFO=$(curl -s "$API_URL")
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
 
@@ -180,9 +179,9 @@ configure_firewall() {
     PORTS_TO_OPEN=("80" "443" "8443")
 
     if command -v ufw &> /dev/null; then
-        if ! ufw status | grep -q "Status: active"; then
-            warn "UFW is inactive. Attempting to enable it."
-            sudo ufw --force enable
+        if ! sudo ufw status | grep -q "Status: active"; then
+            warn "UFW is inactive. Skipping firewall configuration. Please manage ports manually if needed."
+            return
         fi
         for port in "${PORTS_TO_OPEN[@]}"; do
             if ! sudo ufw status | grep -qw "$port"; then
@@ -195,8 +194,9 @@ configure_firewall() {
         done
         success "UFW configuration is complete."
     elif command -v firewall-cmd &> /dev/null; then
-        if ! firewall-cmd --state | grep -q "running"; then
-             error "firewalld is not running. Please start it and run the script again."
+        if ! sudo firewall-cmd --state &> /dev/null; then
+            warn "firewalld is not running. Skipping firewall configuration. Please manage ports manually if needed."
+            return
         fi
         
         reload_needed=false
@@ -240,6 +240,7 @@ generate_password() {
 }
 
 generate_ss_password() {
+    # For Shadowsocks 2022, the key must be Base64 encoded
     openssl rand -base64 32
 }
 
