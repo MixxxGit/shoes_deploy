@@ -192,7 +192,7 @@ download_and_install() {
     sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
     
     info "Verifying installed binary..."
-    if ! "${INSTALL_DIR}/${BINARY_NAME}" --help &> /dev/null; then
+    if ! "${INSTALL_DIR}/${BINARY_NAME}" -h 2>&1 | grep "server uri or config filename" >/dev/null; then
        error "The installed binary seems to be broken or incompatible."
     fi
     success "Step complete: Binary '${BINARY_NAME}' installed to ${INSTALL_DIR}"
