@@ -32,7 +32,6 @@ SERVICE_FILE="/etc/systemd/system/shoes.service"
 BINARY_NAME="shoes"
 CONFIG_NAME="config.yml"
 CLIENT_CONFIG_FILE="client_config.txt"
-# CERT_BASE_DIR is no longer needed, search paths are defined in find_domain_and_certs
 
 # --- Global System Variables ---
 OS=""
@@ -197,25 +196,38 @@ download_and_install() {
     success "Step complete: Binary '${BINARY_NAME}' installed to ${INSTALL_DIR}"
 }
 
-# --- MODIFIED FUNCTION ---
+# --- CORRECTED FUNCTION ---
 find_domain_and_certs() {
     local CERT_SEARCH_DIRS=("/root/.acme.sh" "/root/cert")
-    info "Step: Searching for domain and certificates in '${CERT_SEARCH_DIRS[*]}'..."
+    info "Step: Searching for domain and certificates in common locations..."
+
+    # Create a new array with only existing directories
+    local existing_search_dirs=()
+    for dir in "${CERT_SEARCH_DIRS[@]}"; do
+        if [ -d "$dir" ]; then
+            existing_search_dirs+=("$dir")
+        fi
+    done
+
+    # If no directories are found, exit with an error
+    if [ ${#existing_search_dirs[@]} -eq 0 ]; then
+        error "Could not find any certificate directories. Searched in: ${CERT_SEARCH_DIRS[*]}"
+    fi
+    info "Found existing certificate directories to search: ${existing_search_dirs[*]}"
     
-    # Find the most recently modified domain directory across all search paths
     local DOMAIN_DIR=""
-    # The 2>/dev/null suppresses "No such file or directory" errors if a search path doesn't exist
-    DOMAIN_DIR=$(find "${CERT_SEARCH_DIRS[@]}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+    # Now find is called only with existing paths and will not cause an error
+    DOMAIN_DIR=$(find "${existing_search_dirs[@]}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
 
     if [ -z "$DOMAIN_DIR" ]; then
-        error "No domain subdirectories found in any of the search paths: ${CERT_SEARCH_DIRS[*]}"
+        error "No domain subdirectories found in any of the searched paths: ${existing_search_dirs[*]}"
     fi
 
     local DIR_BASENAME
     DIR_BASENAME=$(basename "$DOMAIN_DIR")
     info "Automatically selected the most recently updated domain directory: $DOMAIN_DIR"
     
-    # Set the domain name, stripping potential suffixes like _ecc or _rsa from acme.sh
+    # Set the domain name, stripping suffixes like _ecc or _rsa from acme.sh
     DOMAIN=${DIR_BASENAME%_*}
 
     # Find the certificate file
