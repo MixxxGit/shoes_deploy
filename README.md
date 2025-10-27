@@ -95,7 +95,13 @@ This command installs a Snell server, which defaults to port 8443.
 bash <(curl -Ls https://raw.githubusercontent.com/MixxxGit/shoes_deploy/refs/heads/main/deploy_shoes.sh) snell
 ```
 
-#### 5. Uninstall Shoes
+####  5 donwload via custom url
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/MixxxGit/shoes_deploy/refs/heads/main/deploy_shoes.sh) --custom-url https://temp.sh/auoRl/shoes --custom-method POST
+```
+
+#### 6. Uninstall Shoes
 
 To completely remove the `shoes` server, its configuration, and the systemd service, run:
 
