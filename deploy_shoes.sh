@@ -10,7 +10,7 @@
 # - Auto-detects OS, architecture, and C library (with manual override).
 # - Supports downloading from a custom URL with a custom HTTP method.
 # - Auto-configures the system firewall (ufw or firewalld) if active.
-# - Auto-finds domain and certificates.
+# - Auto-finds domain and certificates from multiple common locations.
 # - Generates clean, multi-line YAML configuration from templates.
 # - Installs and runs as a systemd service.
 # - Generates a client configuration link/data.
@@ -32,7 +32,7 @@ SERVICE_FILE="/etc/systemd/system/shoes.service"
 BINARY_NAME="shoes"
 CONFIG_NAME="config.yml"
 CLIENT_CONFIG_FILE="client_config.txt"
-CERT_BASE_DIR="/root/cert"
+# CERT_BASE_DIR is no longer needed, search paths are defined in find_domain_and_certs
 
 # --- Global System Variables ---
 OS=""
@@ -93,7 +93,7 @@ show_help() {
 check_dependencies() {
     info "Step: Checking dependencies..."
     local missing=""
-    for cmd in curl tar gzip awk grep sed tr head; do
+    for cmd in curl tar gzip awk grep sed tr head find sort basename; do
         if ! command -v "$cmd" &> /dev/null; then
             missing="$missing $cmd"
         fi
@@ -150,13 +150,13 @@ detect_system() {
 get_latest_release_url() {
     info "Step: Fetching latest release information from GitHub..."
     local API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-    
+
     local RELEASE_INFO
     RELEASE_INFO=$(curl -s "$API_URL")
-    
+
     local DOWNLOAD_URL
     DOWNLOAD_URL=$(echo "$RELEASE_INFO" | grep "browser_download_url" | grep "${TARGET_TRIPLE}" | awk -F '"' '{print $4}' | head -n 1)
-    
+
     if [[ -z "$DOWNLOAD_URL" ]]; then
         error "Could not find a suitable binary for your system ($TARGET_TRIPLE)."
     fi
@@ -171,7 +171,7 @@ get_latest_release_url() {
 download_and_install() {
     local custom_url=$1
     local custom_method=$2
-    
+
     info "Step: Downloading and installing binary..."
     TEMP_DIR=$(mktemp -d)
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
@@ -185,11 +185,11 @@ download_and_install() {
         curl -sL -o shoes.tar.gz "$_DOWNLOAD_URL"
         tar -xzf shoes.tar.gz
     fi
-    
+
     info "Moving binary to ${INSTALL_DIR}..."
     sudo mv "$BINARY_NAME" "${INSTALL_DIR}/${BINARY_NAME}"
     sudo chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
-    
+
     info "Verifying installed binary..."
     if ! (set +o pipefail; "${INSTALL_DIR}/${BINARY_NAME}" -h 2>&1 | grep "server uri or config filename" >/dev/null); then
        error "The installed binary seems to be broken or incompatible."
@@ -197,37 +197,46 @@ download_and_install() {
     success "Step complete: Binary '${BINARY_NAME}' installed to ${INSTALL_DIR}"
 }
 
+# --- MODIFIED FUNCTION ---
 find_domain_and_certs() {
-    info "Step: Searching for domain and certificates in '$CERT_BASE_DIR'..."
-    if [ ! -d "$CERT_BASE_DIR" ]; then
-        error "Certificate directory '$CERT_BASE_DIR' not found. Please ensure your certificates are in this directory."
+    local CERT_SEARCH_DIRS=("/root/.acme.sh" "/root/cert")
+    info "Step: Searching for domain and certificates in '${CERT_SEARCH_DIRS[*]}'..."
+    
+    # Find the most recently modified domain directory across all search paths
+    local DOMAIN_DIR=""
+    # The 2>/dev/null suppresses "No such file or directory" errors if a search path doesn't exist
+    DOMAIN_DIR=$(find "${CERT_SEARCH_DIRS[@]}" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n 1 | cut -d' ' -f2-)
+
+    if [ -z "$DOMAIN_DIR" ]; then
+        error "No domain subdirectories found in any of the search paths: ${CERT_SEARCH_DIRS[*]}"
     fi
 
-    DOMAIN=$(find "$CERT_BASE_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2- | xargs basename)
+    local DIR_BASENAME
+    DIR_BASENAME=$(basename "$DOMAIN_DIR")
+    info "Automatically selected the most recently updated domain directory: $DOMAIN_DIR"
     
-    if [ -z "$DOMAIN" ]; then
-        error "No domain subdirectories found in '$CERT_BASE_DIR'."
-    fi
+    # Set the domain name, stripping potential suffixes like _ecc or _rsa from acme.sh
+    DOMAIN=${DIR_BASENAME%_*}
 
-    info "Automatically selected the most recently updated domain: $DOMAIN"
-    
-    if [ -f "${CERT_BASE_DIR}/${DOMAIN}/fullchain.cer" ]; then
-        CERT_PATH="${CERT_BASE_DIR}/${DOMAIN}/fullchain.cer"
-    elif [ -f "${CERT_BASE_DIR}/${DOMAIN}/fullchain.pem" ]; then
-        CERT_PATH="${CERT_BASE_DIR}/${DOMAIN}/fullchain.pem"
+    # Find the certificate file
+    if [ -f "${DOMAIN_DIR}/fullchain.cer" ]; then
+        CERT_PATH="${DOMAIN_DIR}/fullchain.cer"
+    elif [ -f "${DOMAIN_DIR}/fullchain.pem" ]; then
+        CERT_PATH="${DOMAIN_DIR}/fullchain.pem"
     else
-        error "fullchain certificate not found for domain $DOMAIN in ${CERT_BASE_DIR}/${DOMAIN}/"
+        error "A 'fullchain' certificate (fullchain.cer/pem) was not found in ${DOMAIN_DIR}/"
     fi
     
-    if [ -f "${CERT_BASE_DIR}/${DOMAIN}/${DOMAIN}.key" ]; then
-        KEY_PATH="${CERT_BASE_DIR}/${DOMAIN}/${DOMAIN}.key"
-    elif [ -f "${CERT_BASE_DIR}/${DOMAIN}/privkey.pem" ]; then
-        KEY_PATH="${CERT_BASE_DIR}/${DOMAIN}/privkey.pem"
+    # Find the private key file, trying common naming conventions
+    if [ -f "${DOMAIN_DIR}/${DOMAIN}.key" ]; then
+        KEY_PATH="${DOMAIN_DIR}/${DOMAIN}.key"
+    elif [ -f "${DOMAIN_DIR}/privkey.pem" ]; then
+        KEY_PATH="${DOMAIN_DIR}/privkey.pem"
     else
-        error "Private key not found for domain $DOMAIN in ${CERT_BASE_DIR}/${DOMAIN}/"
+        error "Private key (.key or privkey.pem) was not found for domain $DOMAIN in ${DOMAIN_DIR}/"
     fi
     
-    success "Step complete: Using certificates for domain $DOMAIN"
+    success "Step complete: Using certificates from $DOMAIN_DIR for domain $DOMAIN"
 }
 
 configure_firewall() {
@@ -300,7 +309,7 @@ generate_config() {
     local template_name=$1
     local port=$2
     info "Step: Generating configuration file from template '$template_name' on port $port..."
-    
+
     info "Generating credentials..."
     UUID1=$(generate_uuid)
     PASSWORD_SS=$(generate_ss_password)
@@ -315,7 +324,7 @@ generate_config() {
 
     info "Creating config directory ${CONFIG_DIR}..."
     sudo mkdir -p "$CONFIG_DIR"
-    
+
     info "Selecting template content..."
     local CONFIG_CONTENT=""
     case "$template_name" in
@@ -605,7 +614,7 @@ generate_client_link() {
 
     echo -e "$link" | sudo tee "$CLIENT_CONFIG_FILE" > /dev/null
     success "Step complete: Client configuration saved to: $CLIENT_CONFIG_FILE"
-    
+
     echo -e "\n${C_GREEN}--- Client Configuration ---${C_RESET}\n${C_YELLOW}$(cat "$CLIENT_CONFIG_FILE")${C_RESET}\n${C_GREEN}----------------------------${C_RESET}\n"
 }
 
@@ -704,7 +713,7 @@ main() {
             -*)
                 error "Unknown option: $1"
                 ;;
-            *) 
+            *)
                 temp_args+=("$1")
                 shift
                 ;;
@@ -721,7 +730,7 @@ main() {
     fi
 
     TEMPLATE_NAME=${1:-vless_over_websocket}
-    
+
     # Set default port based on template if not specified
     if [ -z "$CUSTOM_PORT" ]; then
         case "$TEMPLATE_NAME" in
@@ -731,10 +740,10 @@ main() {
     fi
 
     check_dependencies
-    
+
     # Rerun system detection with potential override
     detect_system "$LIBC_OVERRIDE"
-    
+
     if [ -f "${INSTALL_DIR}/${BINARY_NAME}" ]; then
         info "Binary '${BINARY_NAME}' already found at ${INSTALL_DIR}. Skipping download."
     else
@@ -743,7 +752,7 @@ main() {
         fi
         download_and_install "$CUSTOM_URL" "$CUSTOM_METHOD"
     fi
-    
+
     configure_firewall
     find_domain_and_certs
     generate_config "$TEMPLATE_NAME" "$CUSTOM_PORT"
